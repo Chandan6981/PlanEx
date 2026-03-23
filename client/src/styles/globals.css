@@ -117,7 +117,7 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html { font-size: 14px; scroll-behavior: smooth; }
+html { font-size: 21px; scroll-behavior: smooth; }
 
 body {
   font-family: var(--font);
@@ -151,17 +151,29 @@ input, textarea, select { font-family: var(--font); }
 .main-content {
   flex: 1;
   margin-left: var(--sidebar-width);
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .page-content {
   flex: 1;
   padding: 28px 32px;
   padding-top: calc(var(--header-height) + 24px);
-  max-width: 1400px;
   width: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* When page-content contains a kanban board — prevent page scroll */
+.page-content.board-mode {
+  overflow-y: hidden;
+  overflow-x: hidden;
+  flex: 1;
 }
 
 /* ===== SIDEBAR ===== */
@@ -533,11 +545,15 @@ select.input {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 11px 12px;
+  padding: 11px 12px 11px 16px; /* left padding for priority bar */
   cursor: pointer;
   transition: var(--transition);
   position: relative;
-  overflow: hidden;
+  overflow: visible;           /* never clip card content */
+  word-break: break-word;      /* long words wrap */
+  min-width: 0;                /* flex child can shrink */
+  box-sizing: border-box;
+  width: 100%;                 /* fill column width */
 }
 
 .task-card::before {
@@ -563,10 +579,18 @@ select.input {
   color: var(--text-primary);
   line-height: 1.45;
   margin-bottom: 8px;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 
 .task-card-meta {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* ===== PROGRESS BAR ===== */
@@ -620,11 +644,19 @@ select.input {
 
 /* ===== KANBAN ===== */
 .board-container {
-  display: flex; gap: 12px;
-  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
   overflow-x: auto;
-  padding-bottom: 24px;
-  min-height: calc(100vh - 220px);
+  overflow-y: hidden;
+  padding-bottom: 16px;
+  /* Explicit height: viewport minus header, stats bar, filters */
+  height: calc(100vh - var(--header-height) - 180px);
+  min-height: 300px;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  flex-shrink: 0;
 }
 
 .board-column {
@@ -633,13 +665,17 @@ select.input {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;   /* header fixed, body scrolls */
   overflow: hidden;
+  min-height: 200px;
 }
 
 .board-column-header {
   padding: 11px 12px;
   display: flex; align-items: center; gap: 7px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;            /* header never shrinks */
 }
 
 .column-name {
@@ -661,8 +697,18 @@ select.input {
 
 .board-column-body {
   padding: 8px;
-  display: flex; flex-direction: column; gap: 6px;
-  min-height: 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 80px;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  /* Ensure cards never get clipped horizontally */
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* ===== EMPTY STATES ===== */
@@ -1283,4 +1329,10 @@ select.input {
 
 [data-theme="light"] .progress-bar {
   background: rgba(0,0,0,0.08);
+}
+
+/* ===== MIC BUTTON PULSE ===== */
+@keyframes micPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
 }

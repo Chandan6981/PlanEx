@@ -89,12 +89,12 @@ export default function Dashboard() {
           ))}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px 280px', gap: 16, marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr minmax(300px, 360px) minmax(240px, 300px)', gap: 16, marginBottom: 24 }}>
 
           {/* ── My Priority Tasks ── */}
           <div className="card">
             <div className="section-header">
-              <span className="section-title">My Priority Tasks</span>
+              <span className="section-title">🔴 High Priority Tasks</span>
               <button className="btn btn-ghost btn-sm" onClick={() => navigate('/my-tasks')} style={{ fontSize: '0.72rem' }}>
                 View all →
               </button>
@@ -103,7 +103,7 @@ export default function Dashboard() {
               <div className="empty-state" style={{ padding: '28px 0' }}>
                 <div className="empty-state-icon">🎉</div>
                 <h3>All clear!</h3>
-                <p>No pending tasks assigned to you.</p>
+                <p>No high or urgent priority tasks. You are on top of things!</p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

@@ -8,7 +8,7 @@ const taskSchema = new mongoose.Schema({
   assignees: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   priority: { type: String, enum: ['none', 'low', 'medium', 'high', 'urgent'], default: 'none' },
-  status: { type: String, enum: ['todo', 'inprogress', 'review', 'done'], default: 'todo' },
+  status: { type: String, default: 'todo' },
   dueDate: { type: Date },
   startDate: { type: Date },
   completedAt: { type: Date },
@@ -21,9 +21,10 @@ const taskSchema = new mongoose.Schema({
     endDate: Date
   },
   subtasks: [{
-    title: String,
+    title:     String,
     completed: { type: Boolean, default: false },
-    assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    assignee:  { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    addedBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdAt: { type: Date, default: Date.now }
   }],
   attachments: [{
@@ -36,11 +37,13 @@ const taskSchema = new mongoose.Schema({
     uploadedAt: { type: Date, default: Date.now }
   }],
   comments: [{
-    text: String,
-    author: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    mentions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    text:      String,
+    author:    { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    mentions:  [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    isVoice:   { type: Boolean, default: false },
+    audioUrl:  { type: String, default: null },
     createdAt: { type: Date, default: Date.now },
-    editedAt: Date
+    editedAt:  Date
   }],
   activityLog: [{
     action: String,
@@ -64,11 +67,12 @@ const taskSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
-taskSchema.index({ project:   1, createdAt: -1 });
-taskSchema.index({ assignees: 1, status:    1  });
-taskSchema.index({ createdBy: 1               });
-taskSchema.index({ dueDate:   1, status:    1  });
-taskSchema.index({ title: 'text', description: 'text' });
+// ── Indexes for common query patterns ────────────────────────────────────────
+taskSchema.index({ project:   1, createdAt: -1 }); // getAllTasks by project
+taskSchema.index({ assignees: 1, status:    1  }); // myTasks queries
+taskSchema.index({ createdBy: 1               }); // creator queries
+taskSchema.index({ dueDate:   1, status:    1  }); // overdue/due-soon queries
+taskSchema.index({ title: 'text', description: 'text' }); // full text search
 
 taskSchema.pre('save', function(next) {
   this.updatedAt = Date.now();

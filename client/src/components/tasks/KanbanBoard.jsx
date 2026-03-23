@@ -54,7 +54,7 @@ function TaskCard({ task, index }) {
             }
           }}
         >
-          <div className="task-card-title line-clamp-2">{task.title}</div>
+          <div className="task-card-title">{task.title}</div>
 
           {task.tags?.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
@@ -165,7 +165,6 @@ export default function KanbanBoard({ tasks, project }) {
                     style={{
                       background: snapshot.isDraggingOver ? 'rgba(99,102,241,0.05)' : 'transparent',
                       transition: 'background 0.15s ease',
-                      minHeight: 80,
                     }}
                   >
                     {colTasks.length === 0 && !snapshot.isDraggingOver && (

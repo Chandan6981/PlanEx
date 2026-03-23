@@ -9,9 +9,43 @@ const { pushToQueue, QUEUE_EVENTS }      = require('../services/queueService');
 const { deleteFile }                     = require('../services/s3Service');
 
 const toObjId = id => new ObjectId(id.toString());
-const POPULATE_USER    = 'name email color avatar';
-const POPULATE_PROJECT = 'name color icon';
 
+// Consistent populate fields — defined once, used everywhere
+const POPULATE_USER    = 'name email color avatar';
+const POPULATE_PROJECT = 'name color icon owner members';
+
+//Permission helper
+// Returns 'owner' | 'assignee' | 'none'
+// 'owner'    → task creator, project owner, project admin — full access
+// 'assignee' → assigned to task but not creator/owner — restricted access
+// 'none'     → no relation to task — no access
+const getTaskPermission = (task, userId, project) => {
+  const uid       = userId.toString();
+  const creatorId = (task.createdBy?._id || task.createdBy)?.toString();
+  if (creatorId === uid) return 'owner';
+
+  const ownerId = (project?.owner?._id || project?.owner)?.toString();
+  if (ownerId === uid) return 'owner';
+
+  const isProjectAdmin = (project?.members || []).some(m =>
+    (m.user?._id || m.user)?.toString() === uid &&
+    ['owner', 'admin'].includes(m.role)
+  );
+  if (isProjectAdmin) return 'owner';
+
+  const isAssignee = (task.assignees || []).some(a =>
+    (a?._id || a)?.toString() === uid
+  );
+  if (isAssignee) return 'assignee';
+
+  return 'none';
+};
+
+// Fields that only owners can update
+const OWNER_ONLY_FIELDS = ['title', 'description', 'assignees', 'priority', 'dueDate', 'estimatedHours', 'tags', 'isRecurring', 'recurringPattern'];
+
+
+//GET /tasks
 const getAllTasks = async (req, res, next) => {
   try {
     const filter = {};
@@ -26,6 +60,7 @@ const getAllTasks = async (req, res, next) => {
       ];
     }
 
+    // Only paginate when explicitly requested — keeps all existing client code working
     if (req.query.page) {
       const page  = Math.max(1, parseInt(req.query.page)  || 1);
       const limit = Math.min(100, parseInt(req.query.limit) || 50);
@@ -44,6 +79,7 @@ const getAllTasks = async (req, res, next) => {
       return res.json({ tasks, pagination: { total, page, pages: Math.ceil(total / limit), limit } });
     }
 
+    // Default — return plain array (backwards compatible with all client code)
     const tasks = await Task.find(filter)
       .populate('assignees', POPULATE_USER)
       .populate('createdBy', POPULATE_USER)
@@ -54,6 +90,7 @@ const getAllTasks = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+//GET /tasks/:id
 const getTask = async (req, res, next) => {
   try {
     const task = await Task.findById(req.params.id)
@@ -61,13 +98,19 @@ const getTask = async (req, res, next) => {
       .populate('createdBy',         POPULATE_USER)
       .populate('comments.author',   POPULATE_USER)
       .populate('activityLog.user',  POPULATE_USER)
-      .populate('subtasks.assignee', POPULATE_USER);
+      .populate('subtasks.assignee', POPULATE_USER)
+      .populate('subtasks.addedBy',  'name color avatar')
+      .populate('project',           'name owner members');
 
     if (!task) return res.status(404).json({ message: 'Task not found' });
-    res.json(task);
+
+    // Include permission so client can gate UI elements without extra API calls
+    const permission = getTaskPermission(task, req.user._id, task.project);
+    res.json({ ...task.toObject(), _permission: permission });
   } catch (err) { next(err); }
 };
 
+//POST /tasks
 const createTask = async (req, res, next) => {
   try {
     const assigneeSet = [...new Set([
@@ -87,6 +130,7 @@ const createTask = async (req, res, next) => {
     await task.populate('createdBy', POPULATE_USER);
     await task.populate('project',   POPULATE_PROJECT);
 
+    // Notify other assignees — socket (instant) + SQS email (async, non-blocking)
     for (const a of task.assignees) {
       if (a._id.toString() === req.user._id.toString()) continue;
 
@@ -103,6 +147,7 @@ const createTask = async (req, res, next) => {
         type:    NOTIFICATION_TYPE.TASK
       });
 
+      // Async email via SQS — never blocks the API response
       await pushToQueue(QUEUE_EVENTS.TASK_ASSIGNED, {
         to:           a.email,
         toName:       a.name,
@@ -117,6 +162,7 @@ const createTask = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// PUT /tasks/bulk/update
 const bulkUpdateTasks = async (req, res, next) => {
   try {
     const { taskIds, update } = req.body;
@@ -127,6 +173,7 @@ const bulkUpdateTasks = async (req, res, next) => {
     if (taskIds.length > 100)
       return res.status(400).json({ message: 'Cannot bulk update more than 100 tasks at once' });
 
+    // Whitelist — never allow sensitive fields to be bulk-changed
     const ALLOWED = ['status', 'priority', 'column', 'dueDate', 'assignees'];
     const safeUpdate = {};
     for (const key of Object.keys(update || {})) {
@@ -146,29 +193,55 @@ const bulkUpdateTasks = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+//PUT /tasks/:id
 const updateTask = async (req, res, next) => {
   try {
     const oldTask = await Task.findById(req.params.id)
-      .populate('assignees', POPULATE_USER);
+      .populate('assignees', POPULATE_USER)
+      .populate('project',   'name owner members');
     if (!oldTask) return res.status(404).json({ message: 'Task not found' });
+
+    //Permission check
+    const perm = getTaskPermission(oldTask, req.user._id, oldTask.project);
+    if (perm === 'none')
+      return res.status(403).json({ message: 'You do not have access to this task' });
+
+    // Assignees can only update status/column — strip all restricted fields
+    const updateBody = { ...req.body };
+    if (perm === 'assignee') {
+      OWNER_ONLY_FIELDS.forEach(f => delete updateBody[f]);
+    }
 
     const oldAssigneeIds = (oldTask.assignees || []).map(a => (a._id || a).toString());
 
+    // Build activity log entries
     const activityEntries = [];
     for (const field of ['title', 'status', 'priority', 'column', 'dueDate']) {
-      if (req.body[field] !== undefined && String(req.body[field]) !== String(oldTask[field])) {
+      if (updateBody[field] !== undefined && String(updateBody[field]) !== String(oldTask[field])) {
         activityEntries.push({
           action:   'updated', field,
           oldValue: String(oldTask[field]),
-          newValue: String(req.body[field]),
+          newValue: String(updateBody[field]),
           user:     req.user._id
         });
       }
     }
 
-    const updateBody = { ...req.body };
+    // Cast assignees to ObjectIds
     if (updateBody.assignees) {
-      updateBody.assignees = updateBody.assignees.map(a => toObjId(a));
+      updateBody.assignees = updateBody.assignees.map(a => toObjId(a.toString()));
+    }
+    // Sanitize subtasks — strip populated objects down to plain IDs
+    // so Mongoose never receives { _id, name, color } where it expects ObjectId
+    if (updateBody.subtasks) {
+      updateBody.subtasks = updateBody.subtasks.map(s => ({
+        _id:       s._id,
+        title:     s.title,
+        completed: s.completed,
+        addedBy:   s.addedBy?._id || s.addedBy || null,
+        assignee:  s.assignee?._id || s.assignee || null,
+        createdAt: s.createdAt,
+      }));
     }
 
     const task = await Task.findByIdAndUpdate(
@@ -181,6 +254,7 @@ const updateTask = async (req, res, next) => {
      .populate('activityLog.user', POPULATE_USER)
      .populate('project',          POPULATE_PROJECT);
 
+    // Notify newly added assignees
     const newAssigneeIds = (task.assignees || []).map(a => (a._id || a).toString());
     for (const uid of newAssigneeIds.filter(id => !oldAssigneeIds.includes(id))) {
       if (uid === req.user._id.toString()) continue;
@@ -214,15 +288,20 @@ const updateTask = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+//DELETE /tasks/:id
 const deleteTask = async (req, res, next) => {
   try {
     const task = await Task.findById(req.params.id)
-      .populate('assignees', POPULATE_USER);
+      .populate('assignees', POPULATE_USER)
+      .populate('project',   'name owner members');
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
-    if (task.createdBy.toString() !== req.user._id.toString())
-      return res.status(403).json({ message: 'Only the task creator can delete this task' });
+    // Only owners (creator / project owner / project admin) can delete
+    const perm = getTaskPermission(task, req.user._id, task.project);
+    if (perm !== 'owner')
+      return res.status(403).json({ message: 'Only the task creator or project owner can delete tasks' });
 
+    // Delete all S3 attachments before removing the task
     if (task.attachments?.length > 0) {
       await Promise.all(task.attachments.map(a => deleteFile(a.url)));
     }
@@ -241,33 +320,50 @@ const deleteTask = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+//POST /tasks/:id/comments
 const addComment = async (req, res, next) => {
   try {
-    const { text } = req.body;
-    if (!text?.trim())
+    const { text, isVoice, audioUrl } = req.body;
+
+    // For voice comments: text can be empty transcript (will show as "Voice message")
+    // For text comments: text is required
+    if (!isVoice && !text?.trim())
       return res.status(400).json({ message: 'Comment text is required' });
-    if (text.trim().length > 2000)
+    if (text && text.trim().length > 2000)
       return res.status(400).json({ message: 'Comment must be under 2000 characters' });
+
+    // Build comment object
+    const comment = {
+      text:     (text?.trim()) || '🎤 Voice message',
+      author:   req.user._id,
+      isVoice:  isVoice === true || isVoice === 'true',
+      audioUrl: audioUrl || null,
+    };
 
     const task = await Task.findByIdAndUpdate(
       req.params.id,
-      { $push: { comments: { text: text.trim(), author: req.user._id } } },
+      { $push: { comments: comment } },
       { new: true }
     ).populate('comments.author', POPULATE_USER)
      .populate('assignees',       POPULATE_USER)
      .populate('createdBy',       POPULATE_USER)
      .populate('project',         POPULATE_PROJECT);
 
-    for (const a of (task.assignees || [])) {
-      if (a._id.toString() === req.user._id.toString()) continue;
-      await pushToQueue(QUEUE_EVENTS.COMMENT_ADDED, {
-        to:            a.email,
-        toName:        a.name,
-        commenterName: req.user.name,
-        taskTitle:     task.title,
-        taskId:        task._id.toString(),
-        commentText:   text.trim()
-      });
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+
+    // Notify assignees via SQS (skip for voice — no readable text preview)
+    if (!isVoice) {
+      for (const a of (task.assignees || [])) {
+        if (a._id.toString() === req.user._id.toString()) continue;
+        await pushToQueue(QUEUE_EVENTS.COMMENT_ADDED, {
+          to:            a.email,
+          toName:        a.name,
+          commenterName: req.user.name,
+          taskTitle:     task.title,
+          taskId:        task._id.toString(),
+          commentText:   text.trim()
+        });
+      }
     }
 
     emitTask(req.io, 'task:updated', task);
@@ -275,6 +371,74 @@ const addComment = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+//POST /tasks/:id/comments/voice — upload audio then save comment
+const addVoiceComment = async (req, res, next) => {
+  try {
+    if (!req.file)
+      return res.status(400).json({ message: 'No audio file uploaded' });
+
+    const transcript = req.body.transcript?.trim() || '';
+    const audioUrl   = req.file.location; // S3 URL from multer-s3
+
+    const comment = {
+      text:     transcript || '🎤 Voice message',
+      author:   req.user._id,
+      isVoice:  true,
+      audioUrl,
+    };
+
+    const task = await Task.findByIdAndUpdate(
+      req.params.id,
+      { $push: { comments: comment } },
+      { new: true }
+    ).populate('comments.author', POPULATE_USER)
+     .populate('assignees',       POPULATE_USER)
+     .populate('createdBy',       POPULATE_USER)
+     .populate('project',         POPULATE_PROJECT);
+
+    if (!task) {
+      // Task not found — clean up the uploaded audio from S3
+      await deleteFile(audioUrl);
+      return res.status(404).json({ message: 'Task not found' });
+    }
+
+    emitTask(req.io, 'task:updated', task);
+    res.json(task);
+  } catch (err) { next(err); }
+};
+
+//DELETE /tasks/:id/comments/:commentId
+const deleteComment = async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+
+    const comment = task.comments.id(req.params.commentId);
+    if (!comment) return res.status(404).json({ message: 'Comment not found' });
+
+    // Only comment author can delete
+    if (comment.author.toString() !== req.user._id.toString())
+      return res.status(403).json({ message: 'Not authorized to delete this comment' });
+
+    // If voice comment — delete audio from S3 first
+    if (comment.isVoice && comment.audioUrl) {
+      await deleteFile(comment.audioUrl);
+    }
+
+    const updatedTask = await Task.findByIdAndUpdate(
+      req.params.id,
+      { $pull: { comments: { _id: req.params.commentId } } },
+      { new: true }
+    ).populate('comments.author', POPULATE_USER)
+     .populate('assignees',       POPULATE_USER)
+     .populate('project',         POPULATE_PROJECT);
+
+    emitTask(req.io, 'task:updated', updatedTask);
+    res.json(updatedTask);
+  } catch (err) { next(err); }
+};
+
+// ── POST /tasks/:id/attachments — upload file to S3 ──────────────────────────
 const uploadAttachment = async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
@@ -313,18 +477,20 @@ const uploadAttachment = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── DELETE /tasks/:id/attachments/:attachmentId ───────────────────────────────
 const deleteAttachment = async (req, res, next) => {
   try {
-    const task = await Task.findById(req.params.id);
+    const task = await Task.findById(req.params.id)
+      .populate('project', 'name owner members');
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
     const attachment = task.attachments.id(req.params.attachmentId);
     if (!attachment) return res.status(404).json({ message: 'Attachment not found' });
 
-    const isUploader = attachment.uploadedBy.toString() === req.user._id.toString();
-    const isCreator  = task.createdBy.toString()        === req.user._id.toString();
-    if (!isUploader && !isCreator)
-      return res.status(403).json({ message: 'Not authorized to delete this attachment' });
+    // Only owners can delete attachments — assignees can view/download only
+    const perm = getTaskPermission(task, req.user._id, task.project);
+    if (perm !== 'owner')
+      return res.status(403).json({ message: 'Only the task creator or project owner can delete attachments' });
 
     await deleteFile(attachment.url);
 
@@ -340,6 +506,7 @@ const deleteAttachment = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+//PUT /tasks/:id/subtasks/:subtaskId
 const updateSubtask = async (req, res, next) => {
   try {
     const task = await Task.findOneAndUpdate(
@@ -354,14 +521,16 @@ const updateSubtask = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+//POST /tasks/:id/subtasks
 const addSubtask = async (req, res, next) => {
   try {
     const task = await Task.findByIdAndUpdate(
       req.params.id,
-      { $push: { subtasks: { title: req.body.title } } },
+      { $push: { subtasks: { title: req.body.title, addedBy: req.user._id } } },
       { new: true }
-    ).populate('assignees', POPULATE_USER)
-     .populate('project',   POPULATE_PROJECT);
+    ).populate('assignees',        POPULATE_USER)
+     .populate('project',          POPULATE_PROJECT)
+     .populate('subtasks.addedBy', 'name color avatar');
 
     emitTask(req.io, 'task:updated', task);
     res.json(task);
@@ -371,6 +540,7 @@ const addSubtask = async (req, res, next) => {
 module.exports = {
   getAllTasks, getTask, createTask,
   bulkUpdateTasks, updateTask, deleteTask,
-  addComment, uploadAttachment, deleteAttachment,
+  addComment, addVoiceComment, deleteComment,
+  uploadAttachment, deleteAttachment,
   updateSubtask, addSubtask
 };

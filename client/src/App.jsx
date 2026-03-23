@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { loadUser, addNotification } from './store/slices/authSlice';
 import { PlanExIcon } from './components/common/PlanExLogo';
-import { fetchProjects } from './store/slices/projectsSlice';
+import { fetchProjects, fetchAssignedProjects } from './store/slices/projectsSlice';
 import { initSocket, getSocket, disconnectSocket } from './utils/socket';
 import { taskUpdatedSocket, taskCreatedSocket, taskDeletedSocket } from './store/slices/tasksSlice';
 import { updateProjectSocket } from './store/slices/projectsSlice';
@@ -19,6 +19,7 @@ import CreateProjectModal from './components/projects/CreateProjectModal';
 import CreateTaskModal    from './components/tasks/CreateTaskModal';
 import TaskDetailPanel    from './components/tasks/TaskDetailPanel';
 import Toast              from './components/ui/Toast';
+import AnalyticsPage          from './components/analytics/AnalyticsPage';
 
 import './styles/globals.css';
 
@@ -28,7 +29,10 @@ function ProtectedLayout() {
   const { user }            = useSelector(s => s.auth);
   const { list: projects }  = useSelector(s => s.projects);
 
-  useEffect(() => { dispatch(fetchProjects()); }, [dispatch]);
+  useEffect(() => {
+    dispatch(fetchProjects());
+    dispatch(fetchAssignedProjects());
+  }, [dispatch]);
 
   // Init socket once per login session
   useEffect(() => {
@@ -66,6 +70,7 @@ function ProtectedLayout() {
           <Route path="/my-tasks"       element={<MyTasks />} />
           <Route path="/projects/:id"   element={<ProjectPage />} />
           <Route path="/search"         element={<SearchPage />} />
+          <Route path="/analytics"      element={<AnalyticsPage />} />
           <Route path="*"               element={<Navigate to="/dashboard" />} />
         </Routes>
       </main>
