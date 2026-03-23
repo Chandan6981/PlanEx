@@ -1,8 +1,6 @@
 # PlanEx — Project Management App
 
-[![CodeFactor](https://www.codefactor.io/repository/github/YOUR_USERNAME/planex/badge)](https://www.codefactor.io/repository/github/YOUR_USERNAME/planex)
-
-A production-ready full-stack project management application built with the MERN stack. Features real-time collaboration, Kanban boards, analytics, offline support, file attachments via AWS S3, async email notifications via AWS SQS, and a comprehensive REST API with MongoDB aggregation pipelines.
+A production-ready full-stack project management application built with the MERN stack. Features real-time collaboration, Kanban boards with custom columns, role-based task permissions, analytics, offline support, voice-to-text input, audio comments via AWS S3, async email notifications via AWS SQS, and a comprehensive REST API with MongoDB aggregation pipelines.
 
 ---
 
@@ -32,16 +30,34 @@ A production-ready full-stack project management application built with the MERN
 
 ### Task Management
 - Full CRUD for tasks with title, description, status, priority, due date
-- Drag and drop Kanban board (Todo → In Progress → In Review → Done)
+- Drag and drop Kanban board (default + custom columns)
 - List view with sorting and filtering
-- Subtasks with completion tracking and progress bar
+- Subtasks with completion tracking, progress bar, and **"added by" attribution**
 - Comments on tasks with real-time updates
+- **Voice-to-text** input for task title, description, and comments (Web Speech API)
+- **Audio comments** — record voice, choose to send as audio file (stored in S3) or text
 - Activity log — tracks every field change with old/new values
-- Tags and estimated hours
-- Recurring task support
+- Tags, estimated hours, recurring task support
 - Bulk status updates across multiple tasks
 - Assignee management with live search picker
-- Click to edit task title inline
+
+### Role-Based Task Access
+- **Owner / Creator / Project Admin** — full access to all task fields
+- **Assignee** — can update status, add comments, add subtasks, upload attachments
+- Assignees cannot: edit title, description, priority, due date, assignees, or delete task/attachments
+- Blue info banner shown to assignees explaining their permissions
+- Server enforces permissions — UI restrictions cannot be bypassed via API
+- `_permission` field returned by `GET /tasks/:id` — client uses server's authoritative answer
+
+### Custom Columns
+- Each project supports unlimited custom columns beyond the 4 defaults
+- Default columns (To Do, In Progress, In Review, Done) are **locked** — cannot rename or delete
+- Custom columns can be renamed, deleted, reordered via drag and drop
+- Custom column IDs use `slug_random` format — never clash with defaults
+- Deleting a column with tasks → tasks auto-migrated to "To Do"
+- Column changes broadcast via Socket.io — all members see update instantly
+- Status filter in project page dynamically includes custom columns
+- Task creation in custom columns works correctly — validator accepts any status string
 
 ### My Tasks
 - Personal task view across all projects
@@ -61,7 +77,32 @@ A production-ready full-stack project management application built with the MERN
 - Project dropdown disabled offline (project tasks need real MongoDB IDs)
 - Partial sync support — failed tasks stay in queue, retried next session
 - Submit button changes to "💾 Save Offline" with yellow color when offline
-- Offline banner shown in modal and My Tasks page
+
+### Voice to Text
+- Mic button on task title, description, and comment fields
+- Click to start recording — browser requests mic permission once
+- Pulsing red waveform icon while listening
+- Speech appends to existing text (doesn't replace)
+- Graceful error handling for all cases: permission denied, no mic, no speech, network error, unsupported browser
+- Hidden automatically on unsupported browsers (Firefox, older Safari)
+- HTTPS check with clear message for production environments
+
+### Audio Comments
+- After voice recording in comments, user is offered choice: **Send as Audio** or **Send as Text**
+- Audio blob recorded via MediaRecorder API alongside SpeechRecognition transcript
+- Audio file uploaded to AWS S3 under `taskflow/voice-comments/{taskId}/`
+- Comment stores both `audioUrl` (S3) and `text` (transcript as caption)
+- Audio comments render with HTML5 `<audio controls>` player + 🎤 Voice badge
+- If S3 upload fails → automatically falls back to sending transcript as text
+- Comment deletion also deletes audio file from S3
+
+### Assigned Projects (Sidebar)
+- Sidebar split into **My Projects** (owned) and **Assigned** (has tasks there)
+- Assigned section shows projects where user has assigned tasks but is NOT the owner
+- Each assigned project shows task count badge
+- Clicking assigned project → shows only YOUR assigned tasks with blue banner
+- Assignee view hides: Add Task button, Manage Columns button
+- Server allows read-only project access for users with assigned tasks
 
 ### File Attachments (AWS S3)
 - Upload images, PDFs, Word documents, text files (max 10MB)
@@ -69,25 +110,24 @@ A production-ready full-stack project management application built with the MERN
 - Drag and drop upload support with live preview
 - Image thumbnails with view/download actions
 - Auto-delete from S3 when task is deleted
-- Files stored at `taskflow/tasks/{taskId}/{timestamp}-{random}.ext`
+- Only task owners can delete attachments (assignees can view/download only)
 
 ### Projects
 - Create and manage multiple projects with custom color and icon
-- Kanban board per project with live stats bar
-- List view per project with filters
+- **Custom Kanban columns** — add, rename, reorder, delete beyond 4 defaults
+- Kanban board per project with live stats bar showing all columns including custom
+- List view per project with filters (status filter includes custom columns)
 - Project members with owner/member roles
-- Real-time progress tracking (stats computed from Redux — instant on drag)
+- Real-time progress tracking — updates instantly on drag/drop
 - Task counts and completion percentage in sidebar
-- Project-level stats via MongoDB aggregation
+- Dynamic stats bar scrolls horizontally when many custom columns present
 
 ### Dashboard (Overview)
 - Stats: Total Projects, Active Tasks, Due Today, Overdue
-- **High Priority Tasks** — only urgent and high priority tasks shown
-- Task Distribution bar chart (Recharts) — scoped to user's own tasks
+- High Priority Tasks — only urgent and high priority tasks shown
+- Task Distribution bar chart — scoped to user's own tasks, deduplicated
 - Per-project progress cards with completion percentage
-- All stats deduplicated — each task counted exactly once
-- Stats computed via MongoDB `$facet` aggregation with `$group` dedup
-- Auto-refreshes on window focus
+- All stats via MongoDB `$facet` aggregation with `$group` deduplication
 
 ### Analytics Page
 **Personal Analytics:**
@@ -104,49 +144,35 @@ A production-ready full-stack project management application built with the MERN
 - Project stats: total, completed, active, overdue, completion rate
 
 ### Notifications
-- In-app notifications panel (newest first, sorted by createdAt)
-- Click individual notification to mark as read — instant UI update
-- Mark all as read — instant UI update via Redux
+- In-app notifications panel (newest first)
+- Instant mark-as-read via Redux — no loading state
 - Unread count badge on bell icon
-- Unread notifications shown in bold with accent dot
 - Persistent storage in user document
 
 ### Email Notifications (AWS SQS + Nodemailer)
-- Async email queue — never blocks API response (~5ms vs ~2000ms)
+- Async email queue — never blocks API response
 - Task assignment emails with professional HTML template
 - Comment notification emails
-- Queue worker runs as separate process (`node queueWorker.js`)
-- Auto-retry on failure via SQS visibility timeout (30s)
+- Queue worker runs as separate process
 - Graceful degradation — app works fine without SQS configured
 
 ### Real-time (Socket.io)
 - Live task creation, updates, deletion on Kanban board
 - Personal `user:id` rooms for My Tasks updates
 - Project `project:id` rooms for Kanban updates
-- Real-time in-app notifications with unread badge
-- Typing indicators on tasks
-- Socket reconnection with polling fallback (`['websocket', 'polling']`)
-- Socket logs in browser console for debugging
+- Real-time in-app notifications
+- Custom column changes broadcast to all project members
+- Socket reconnection with polling fallback
 
 ### Security
-- Helmet.js — secure HTTP headers on every response
+- Helmet.js — secure HTTP headers
 - CORS protection with configurable origin
-- Request size limit (10kb) — blocks large payload attacks
-- Input validation middleware (title, status, priority, email format)
-- ObjectId validation on all `:id` routes before hitting DB
-- Authorization — only task creator can delete, only project owner can delete project
-- Bulk update field whitelist — prevents overwriting sensitive fields
-- No JWT fallback secret — server crashes loudly if missing
-- Rate limiting on auth routes — 10 attempts per 15 minutes
-
-### Code Quality
-- MVC pattern — controllers, routes, models, middleware fully separated
-- Constants file — no magic strings anywhere
-- Centralized error handler — catches Mongoose, JWT, duplicate key errors
-- Socket helpers extracted to `socketHelpers.js`
-- MongoDB indexes on Task model — `project+createdAt`, `assignees+status`, `dueDate+status`, text index
-- Pagination support on task queries (`?page=1&limit=50`)
-- Custom React hook — `useOfflineSync`, `useOnlineStatus`
+- Request size limit (10kb)
+- Input validation middleware
+- ObjectId validation on all `:id` routes
+- Role-based authorization on task operations
+- Bulk update field whitelist
+- Rate limiting on auth routes
 
 ---
 
@@ -160,9 +186,11 @@ A production-ready full-stack project management application built with the MERN
 | React Router v6 | Client-side routing |
 | Socket.io-client | Real-time communication |
 | Axios | HTTP client with JWT interceptor |
-| Recharts | Analytics charts (Line, Bar, Area, Pie) |
+| Recharts | Analytics charts |
 | @hello-pangea/dnd | Drag and drop Kanban board |
 | IndexedDB (native) | Offline task storage |
+| Web Speech API (native) | Voice to text |
+| MediaRecorder API (native) | Audio recording for voice comments |
 
 ### Backend
 | Technology | Purpose |
@@ -171,28 +199,26 @@ A production-ready full-stack project management application built with the MERN
 | Express 4 | Web framework |
 | MongoDB + Mongoose | Database + ODM |
 | Socket.io | Real-time WebSocket server |
-| JWT | Stateless authentication tokens |
-| bcryptjs | Password hashing (12 rounds) |
+| JWT | Stateless authentication |
+| bcryptjs | Password hashing |
 | Helmet | Secure HTTP headers |
 | express-rate-limit | Brute force protection |
-| Multer + multer-s3 | Multipart file upload handling |
+| Multer + multer-s3 | File upload handling |
 | Nodemailer | SMTP email sending |
-| Nodemon | Development auto-restart |
 
 ### Cloud & Infrastructure
 | Service | Purpose |
 |---|---|
-| AWS S3 | File and image storage |
+| AWS S3 | File, image, and audio storage |
 | AWS SQS (FIFO) | Async email message queue |
 | Gmail SMTP | Email delivery |
-| MongoDB Atlas (optional) | Cloud database |
 
 ---
 
 ## Architecture
 
 ```
-Browser (React + Redux + IndexedDB)
+Browser (React + Redux + IndexedDB + Web Speech API)
         │
         ├── REST API (axios) ──────────────────────→ Express Server
         │                                                   │
@@ -209,12 +235,15 @@ Browser (React + Redux + IndexedDB)
                                                                  Gmail SMTP
 ```
 
-### Request Lifecycle
+### Permission System
 ```
-Request → helmet → CORS → express.json(10kb) → rate limit (auth only)
-       → auth.js (JWT verify) → validateObjectId → validator middleware
-       → controller → MongoDB operation → socket emit
-       → SQS push (async, non-blocking) → res.json()
+Task Creator / Project Owner / Project Admin → 'owner' permission → full access
+Task Assignee (not creator/owner)            → 'assignee' permission → restricted
+No relation to task                          → 'none' → 403 Forbidden
+
+Server computes permission on every mutating request.
+Client receives _permission field from GET /tasks/:id.
+UI gates every interactive element based on canEdit / canDelete.
 ```
 
 ### Offline Sync Flow
@@ -232,6 +261,24 @@ User comes back online → 1.5s stability delay
               MyTasks re-fetches → real tasks replace pending ones
 ```
 
+### Voice Comment Flow
+```
+User clicks mic → getUserMedia (one permission prompt)
+                        ↓
+        SpeechRecognition + MediaRecorder start simultaneously
+                        ↓
+              User speaks → stops speaking
+                        ↓
+        SpeechRecognition.onend fires → stops MediaRecorder
+                        ↓
+        Both transcript AND audio blob ready
+                        ↓
+        Choice dialog: "Send as Audio" | "Send as Text" | Discard
+                        ↓
+        Audio → upload blob to S3 → save audioUrl + transcript in MongoDB
+        Text  → save transcript as normal comment
+```
+
 ---
 
 ## Folder Structure
@@ -239,111 +286,88 @@ User comes back online → 1.5s stability delay
 ```
 planex/
 │
-├── client/                                    # React frontend
-│   ├── public/
-│   │   └── index.html                         # HTML entry, title: PlanEx
+├── client/
 │   └── src/
-│       ├── App.jsx                            # Router, socket init, protected layout
-│       ├── index.js                           # React DOM entry point
-│       │
+│       ├── App.jsx
 │       ├── components/
-│       │   ├── analytics/
-│       │   │   └── AnalyticsPage.jsx          # Personal + project analytics with charts
-│       │   ├── auth/
-│       │   │   └── AuthPage.jsx               # Login + Register page
+│       │   ├── analytics/AnalyticsPage.jsx
+│       │   ├── auth/AuthPage.jsx
 │       │   ├── common/
-│       │   │   └── PlanExLogo.jsx             # Reusable SVG logo (PlanExIcon + PlanExLogo)
+│       │   │   ├── MicButton.jsx              # Reusable mic recording button
+│       │   │   └── PlanExLogo.jsx
 │       │   ├── dashboard/
-│       │   │   ├── Dashboard.jsx              # Overview: stats, high priority tasks, charts
-│       │   │   └── SearchPage.jsx             # Search tasks and projects
+│       │   │   ├── Dashboard.jsx
+│       │   │   └── SearchPage.jsx
 │       │   ├── layout/
-│       │   │   ├── Header.jsx                 # Top bar, notifications, theme toggle
-│       │   │   └── Sidebar.jsx                # Navigation, projects list, admin link
+│       │   │   ├── Header.jsx
+│       │   │   └── Sidebar.jsx                # Owned + Assigned project sections
 │       │   ├── projects/
-│       │   │   ├── CreateProjectModal.jsx     # Create project with color/icon picker
-│       │   │   └── ProjectPage.jsx            # Kanban/List view with live stats bar
+│       │   │   ├── CreateProjectModal.jsx
+│       │   │   ├── ManageColumnsModal.jsx     # Custom column management
+│       │   │   └── ProjectPage.jsx            # Assigned view support
 │       │   ├── tasks/
-│       │   │   ├── CreateTaskModal.jsx        # Create task — offline aware, file queue
-│       │   │   ├── KanbanBoard.jsx            # Drag and drop board with columns
-│       │   │   ├── MyTasks.jsx                # Personal view — list + kanban, offline sync
-│       │   │   ├── TaskDetailPanel.jsx        # Slide-out panel — details, files, comments
-│       │   │   └── TaskList.jsx               # Table view with filters
-│       │   └── ui/
-│       │       └── Toast.jsx                  # Toast notification component
-│       │
+│       │   │   ├── CreateTaskModal.jsx        # Offline aware, voice input
+│       │   │   ├── KanbanBoard.jsx            # Dynamic columns, drag and drop
+│       │   │   ├── MyTasks.jsx                # List + Kanban, offline sync
+│       │   │   ├── TaskDetailPanel.jsx        # Role-gated fields, voice comments
+│       │   │   └── TaskList.jsx
+│       │   └── ui/Toast.jsx
 │       ├── hooks/
-│       │   └── useOfflineSync.js              # useOfflineSync + useOnlineStatus hooks
-│       │
-│       ├── store/
-│       │   ├── index.js                       # Redux store configuration
-│       │   └── slices/
-│       │       ├── authSlice.js               # User auth state, notifications, theme
-│       │       ├── projectsSlice.js           # Projects list state
-│       │       ├── tasksSlice.js              # Tasks list, selected task, filters
-│       │       └── uiSlice.js                 # Modals, panels, toasts, viewMode
-│       │
-│       ├── styles/
-│       │   └── globals.css                    # Full design system — dark + light themes
-│       │
+│       │   ├── useOfflineSync.js              # Online status + sync trigger
+│       │   └── useSpeechToText.js             # Speech + MediaRecorder hook
+│       ├── store/slices/
+│       │   ├── authSlice.js
+│       │   ├── projectsSlice.js               # Owned + assigned project lists
+│       │   ├── tasksSlice.js
+│       │   └── uiSlice.js
+│       ├── styles/globals.css
 │       └── utils/
-│           ├── api.js                         # Axios instance with JWT interceptor
-│           ├── helpers.js                     # Date helpers, priority config, initials
-│           ├── indexedDB.js                   # IndexedDB CRUD for offline task storage
-│           ├── socket.js                      # Socket.io client — reconnection + logging
-│           └── syncManager.js                 # Offline→online sync logic with lock
+│           ├── api.js
+│           ├── helpers.js
+│           ├── indexedDB.js                   # IndexedDB CRUD for offline storage
+│           ├── socket.js
+│           └── syncManager.js                 # Offline→online sync with mutex lock
 │
-├── server/                                    # Express backend
-│   ├── index.js                               # Entry point, middleware, routes, socket
-│   ├── queueWorker.js                         # SQS consumer — separate process
-│   ├── .env.example                           # All environment variables documented
-│   │
-│   ├── constants/
-│   │   └── index.js                           # TASK_STATUS, TASK_PRIORITY, NOTIFICATION_TYPE
-│   │
+├── server/
+│   ├── index.js
+│   ├── queueWorker.js
+│   ├── constants/index.js
 │   ├── controllers/
-│   │   ├── adminController.js                 # Platform stats, user/project/task management
-│   │   ├── analyticsController.js             # Personal + project analytics aggregations
-│   │   ├── authController.js                  # register, login, getMe, updateTheme
-│   │   ├── dashboardController.js             # getDashboard — $facet + dedup aggregation
-│   │   ├── projectController.js               # CRUD + members + stats
-│   │   ├── taskController.js                  # CRUD + comments + subtasks + S3 + SQS
-│   │   └── userController.js                  # getAllUsers, profile, notifications
-│   │
+│   │   ├── analyticsController.js
+│   │   ├── authController.js
+│   │   ├── dashboardController.js             # $facet + dedup aggregation
+│   │   ├── projectController.js               # Custom columns, assigned projects
+│   │   ├── taskController.js                  # Permission system, voice comments
+│   │   └── userController.js
 │   ├── middleware/
-│   │   ├── auth.js                            # JWT verification, sets req.user + req.io
-│   │   ├── errorHandler.js                    # Central error handler
-│   │   └── validateObjectId.js                # Validates MongoDB ObjectId in params
-│   │
+│   │   ├── auth.js
+│   │   ├── errorHandler.js
+│   │   └── validateObjectId.js
 │   ├── models/
-│   │   ├── Project.js                         # Project schema with members array
-│   │   ├── Task.js                            # Task schema with compound indexes
-│   │   └── User.js                            # User schema with bcrypt hooks
-│   │
+│   │   ├── Project.js                         # columns array with defaults
+│   │   ├── Task.js                            # addedBy on subtasks, audioUrl on comments
+│   │   └── User.js
 │   ├── routes/
-│   │   ├── admin.js                           # Admin-only routes (role check middleware)
-│   │   ├── analytics.js                       # GET /personal, GET /project/:id
-│   │   ├── auth.js                            # POST /register, /login + rate limit
-│   │   ├── dashboard.js                       # GET /dashboard
-│   │   ├── notifications.js                   # Notification read routes
-│   │   ├── projects.js                        # CRUD + /members + /stats
-│   │   ├── tasks.js                           # CRUD + /comments + /attachments + /subtasks
-│   │   └── users.js                           # GET / + /profile + /notifications
-│   │
+│   │   ├── analytics.js
+│   │   ├── auth.js
+│   │   ├── dashboard.js
+│   │   ├── notifications.js
+│   │   ├── projects.js                        # /assigned route
+│   │   ├── tasks.js                           # /comments/voice route
+│   │   └── users.js
 │   ├── services/
-│   │   ├── emailService.js                    # HTML email templates via nodemailer
-│   │   ├── queueService.js                    # pushToQueue() — SQS FIFO producer
-│   │   └── s3Service.js                       # multer-s3 upload config + deleteFile()
-│   │
+│   │   ├── emailService.js
+│   │   ├── queueService.js
+│   │   └── s3Service.js                       # upload + uploadAudio configs
 │   ├── socket/
-│   │   ├── socketHandler.js                   # Socket.io auth + room management
-│   │   └── socketHelpers.js                   # emitTask(), emitProject() helpers
-│   │
+│   │   ├── socketHandler.js
+│   │   └── socketHelpers.js
 │   └── validators/
-│       ├── authValidator.js                   # validateRegister, validateLogin
-│       ├── projectValidator.js                # validateCreateProject, validateUpdateProject
-│       └── taskValidator.js                   # validateCreateTask, validateUpdateTask
+│       ├── authValidator.js
+│       ├── projectValidator.js
+│       └── taskValidator.js                   # Status enum removed for custom columns
 │
-└── package.json                               # Root package.json
+└── package.json
 ```
 
 ---
@@ -383,7 +407,7 @@ cd server && npm run dev
 # Terminal 2 — React Client (port 3000)
 cd client && npm start
 
-# Terminal 3 — Queue Worker (optional, requires AWS SQS + email config)
+# Terminal 3 — Queue Worker (optional, requires AWS SQS)
 cd server && node queueWorker.js
 ```
 
@@ -400,24 +424,22 @@ JWT_SECRET=your_super_secret_jwt_key_minimum_32_chars
 PORT=5000
 CLIENT_URL=http://localhost:3000
 
-# ── AWS S3 — file attachments (optional) ─────────────────────────────────────
+# ── AWS S3 — file and audio attachments (optional) ───────────────────────────
 AWS_REGION=eu-north-1
 AWS_ACCESS_KEY_ID=your_aws_access_key_id
 AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
 AWS_S3_BUCKET=your-planex-bucket-name
 
 # ── AWS SQS — async email queue (optional) ───────────────────────────────────
-AWS_SQS_QUEUE_URL=https://sqs.eu-north-1.amazonaws.com/ACCOUNT_ID/taskflow-notifications.fifo
+AWS_SQS_QUEUE_URL=https://sqs.eu-north-1.amazonaws.com/ACCOUNT_ID/planex-notifications.fifo
 
-# ── Email via Gmail SMTP (optional, required for queue worker) ────────────────
+# ── Email via Gmail SMTP (optional) ──────────────────────────────────────────
 EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=587
 EMAIL_USER=your@gmail.com
 EMAIL_PASS=your_16_char_app_password
 EMAIL_FROM=PlanEx <your@gmail.com>
 ```
-
-> All AWS and email variables are optional. The app runs fully without them — S3 and SQS errors are caught silently.
 
 ---
 
@@ -434,75 +456,67 @@ EMAIL_FROM=PlanEx <your@gmail.com>
 ### Tasks
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| GET | `/api/tasks` | Get tasks (`?project=`, `?myTasks=true`, `?page=`, `?status=`, `?priority=`) | Yes |
+| GET | `/api/tasks` | Get tasks (`?project=`, `?myTasks=true`, `?status=`, `?priority=`) | Yes |
 | POST | `/api/tasks` | Create task | Yes |
-| GET | `/api/tasks/:id` | Get single task with all populated fields | Yes |
-| PUT | `/api/tasks/:id` | Update task | Yes |
-| DELETE | `/api/tasks/:id` | Delete task (creator only) | Yes |
-| PUT | `/api/tasks/bulk/update` | Bulk update (whitelisted fields only) | Yes |
-| POST | `/api/tasks/:id/comments` | Add comment | Yes |
+| GET | `/api/tasks/:id` | Get task with `_permission` field | Yes |
+| PUT | `/api/tasks/:id` | Update task (restricted fields for assignees) | Yes |
+| DELETE | `/api/tasks/:id` | Delete task (owner only) | Yes |
+| PUT | `/api/tasks/bulk/update` | Bulk update | Yes |
+| POST | `/api/tasks/:id/comments` | Add text comment | Yes |
+| POST | `/api/tasks/:id/comments/voice` | Upload audio + save voice comment | Yes |
+| DELETE | `/api/tasks/:id/comments/:commentId` | Delete comment + S3 audio | Yes |
 | POST | `/api/tasks/:id/attachments` | Upload file to S3 | Yes |
-| DELETE | `/api/tasks/:id/attachments/:aid` | Delete file from S3 | Yes |
-| POST | `/api/tasks/:id/subtasks` | Add subtask | Yes |
+| DELETE | `/api/tasks/:id/attachments/:aid` | Delete file from S3 (owner only) | Yes |
+| POST | `/api/tasks/:id/subtasks` | Add subtask with addedBy | Yes |
 | PUT | `/api/tasks/:id/subtasks/:sid` | Update subtask | Yes |
 
 ### Projects
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| GET | `/api/projects` | Get user's projects with task counts | Yes |
+| GET | `/api/projects` | Get owned projects | Yes |
+| GET | `/api/projects/assigned` | Get projects with assigned tasks | Yes |
 | POST | `/api/projects` | Create project | Yes |
-| GET | `/api/projects/:id` | Get project details | Yes |
+| GET | `/api/projects/:id` | Get project (owners, members, and assignees) | Yes |
 | PUT | `/api/projects/:id` | Update project | Yes |
 | DELETE | `/api/projects/:id` | Delete project (owner only) | Yes |
-| POST | `/api/projects/:id/members` | Add member to project | Yes |
+| POST | `/api/projects/:id/members` | Add member | Yes |
 | GET | `/api/projects/:id/stats` | Get project stats | Yes |
+| PUT | `/api/projects/:id/columns` | Update custom columns | Yes |
 
 ### Users
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| GET | `/api/users` | Get all users (for assignee picker) | Yes |
+| GET | `/api/users` | Get all users | Yes |
 | PUT | `/api/users/profile` | Update profile | Yes |
 | GET | `/api/users/notifications` | Get notifications | Yes |
 | PUT | `/api/users/notifications/read-all` | Mark all read | Yes |
 | PUT | `/api/users/notifications/:id/read` | Mark one read | Yes |
 
-### Dashboard
+### Dashboard & Analytics
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| GET | `/api/dashboard` | All dashboard stats in one query | Yes |
-
-### Analytics
-| Method | Endpoint | Description | Auth |
-|---|---|---|---|
-| GET | `/api/analytics/personal` | Personal stats, charts, productivity | Yes |
+| GET | `/api/dashboard` | All dashboard stats | Yes |
+| GET | `/api/analytics/personal` | Personal stats + charts | Yes |
 | GET | `/api/analytics/project/:id` | Project burn down, velocity, members | Yes |
-
-### Admin
-| Method | Endpoint | Description | Auth |
-|---|---|---|---|
-| GET | `/api/admin/stats` | Platform-wide stats | Admin only |
-| GET | `/api/admin/users` | All users with task counts | Admin only |
-| PUT | `/api/admin/users/:id/role` | Change user role | Admin only |
-| DELETE | `/api/admin/users/:id` | Delete user | Admin only |
-| GET | `/api/admin/projects` | All projects | Admin only |
-| DELETE | `/api/admin/projects/:id` | Delete project + tasks | Admin only |
-| GET | `/api/admin/tasks` | All tasks with filters | Admin only |
-| DELETE | `/api/admin/tasks/:id` | Delete any task | Admin only |
 
 ---
 
 ## AWS Setup
 
-### S3 (File Storage)
+### S3 (File + Audio Storage)
 1. Create S3 bucket → uncheck "Block all public access"
 2. Add bucket policy for public read on `/*`
 3. Add CORS config allowing your domain
 4. Create IAM user → attach `AmazonS3FullAccess`
 5. Generate access keys → add to `.env`
 
+Files stored at:
+- Attachments: `taskflow/tasks/{taskId}/{timestamp}-{random}.ext`
+- Voice comments: `taskflow/voice-comments/{taskId}/{timestamp}-{random}.webm`
+
 ### SQS (Email Queue)
 1. Create FIFO queue → name must end in `.fifo`
-2. Enable **Content-based deduplication**
+2. Enable content-based deduplication
 3. Attach `AmazonSQSFullAccess` to IAM user
 4. Copy Queue URL → add to `.env`
 5. Run `node queueWorker.js` in a separate terminal
@@ -510,7 +524,7 @@ EMAIL_FROM=PlanEx <your@gmail.com>
 ### Gmail App Password
 1. Google Account → Security → 2-Step Verification → enable
 2. Security → App passwords → Generate for "Mail"
-3. Copy 16-character password → add to `EMAIL_PASS` in `.env`
+3. Copy 16-character password → add to `EMAIL_PASS`
 
 ---
 
@@ -518,9 +532,9 @@ EMAIL_FROM=PlanEx <your@gmail.com>
 
 ```bash
 # Server
-npm run dev      # Start with nodemon (development)
-npm start        # Start without nodemon (production)
-npm run worker   # Start SQS queue worker
+npm run dev      # Start with nodemon
+npm start        # Start without nodemon
+node queueWorker.js  # Start SQS queue worker
 
 # Client
 npm start        # Start React dev server
@@ -531,17 +545,19 @@ npm run build    # Production build
 
 ## Key Design Decisions
 
-**Aggregation deduplication** — The dashboard `$facet` pipeline uses a `$group` by `_id` between the root `$match` and the facets. This ensures tasks matching multiple conditions (in your project AND assigned to you) are counted exactly once.
+**Permission system — two layers:** Server computes `getTaskPermission()` on every mutating request using `createdBy`, `project.owner`, and `project.members`. Client receives `_permission` from `GET /tasks/:id` and gates every UI element. Assignees stripping restricted fields from their API call is a UI convenience — the server always re-strips them regardless.
 
-**Offline-first personal tasks** — IndexedDB chosen over localStorage because it supports structured data, has no 5MB limit, and supports indexes. Tasks stored with a `localId` (not a MongoDB ObjectId) so they're never confused with real tasks. The sync manager uses a mutex lock (`isSyncing`) to prevent double-syncing on rapid reconnects.
+**Custom columns — free-form status:** Removed the Mongoose `enum` validator on `task.status` and the Express validator's status check. This allows any string as a status value, enabling custom column IDs like `blocked_ax7k2`. Default columns are enforced at the application layer in `updateColumns`, not the DB layer.
 
-**Socket room strategy** — Two room types: `project:id` for Kanban board updates (all project members), `user:id` for personal My Tasks and notifications (only the specific user). This prevents broadcasting sensitive data to the wrong users.
+**Aggregation deduplication:** Dashboard `$facet` pipeline uses `$group` by `_id` between root `$match` and facets. Tasks matching multiple conditions (in your project AND assigned to you) are counted exactly once.
 
-**SQS decoupling** — Email notifications pushed to SQS queue so the API responds in ~5ms instead of waiting ~2000ms for SMTP. The queue worker runs as a completely separate Node.js process and handles retries automatically via SQS visibility timeout.
+**Offline-first IndexedDB:** Tasks stored with a `localId` (not MongoDB ObjectId) so they're never confused with real tasks. Sync manager uses `isSyncing` mutex to prevent double-syncing on rapid reconnects. Only personal tasks supported offline — project tasks need a real project ObjectId.
 
-**Redux + local state split** — Project task lists live in Redux (shared between Kanban/List/Stats). My Tasks maintains its own local state because it spans all projects and would pollute the project-scoped Redux list. The two sync via socket events.
+**Voice comments — dual recording:** `getUserMedia` called once, stream shared between `SpeechRecognition` (transcript) and `MediaRecorder` (audio blob). Both run simultaneously. On `SpeechRecognition.onend`, `MediaRecorder.stop()` is called — `ondataavailable` fires with final chunk before `onstop`. Choice dialog only shows when both are ready and recording duration ≥ 1 second.
 
-**Defensive array handling** — Every component that consumes API task data uses `Array.isArray()` guards. The Redux slice initializes `state.list = []` on error. This prevents the classic "filtered.filter is not a function" crash when the API response shape changes.
+**Assigned projects — read-only access:** `GET /projects/:id` was updated with a two-step lookup — first try owner/member, then check if user has any assigned tasks. This gives assignees read access to project data (columns, name, color) needed to render the Kanban board correctly, without granting any write permissions.
+
+**Socket room strategy:** Two room types — `project:id` for board updates (all members), `user:id` for personal notifications and My Tasks (specific user only). Custom column changes emit `project:updated` to `project:id` room so all members see the new columns instantly.
 
 ---
 
